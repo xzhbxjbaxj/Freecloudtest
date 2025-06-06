@@ -1,0 +1,68 @@
+name: Auto Renew and Notify
+on:
+  schedule:
+    - cron: "0 0 */6 * *"
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 拉取仓库代码
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. 设置Go环境
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4" # 指定Go版本
+
+      # 3. 编译Go程序
+
+      - name: Build
+        run: |
+          go mod tidy
+          go build -o renew . # 编译生成可执行文件renew
+
+      # 4. 执行renew命令
+
+      - name: Run renew command
+        env:
+          FC_PROFILE: ${{ secrets.FC_PROFILE }} # 注入密钥
+        run: |
+          ./renew -c "$FC_PROFILE" > result.txt  # 结果输出到文件
+        shell: bash
+
+      # 5. 发送失败邮件通知
+
+      - name: Send Failure Notification
+        if: ${{ failure() }}
+        uses: cinotify/github-action@main
+        with:
+          to: ${{ secrets.FC_EMAIL }} # 收件邮箱
+          subject: "!!! Freecloud Renew Task Failed - $(date +'%Y-%m-%d')"
+          body: "<em>Freecloud renew task FAILED!!!</br>See the attachment </em>"
+          type: "text/html"
+          attachment: "result.txt"
+
+      # 6. 发送成功邮件通知
+
+      - name: Send Success Notification
+        if: ${{ success() }}
+        uses: cinotify/github-action@main
+        with:
+          to: ${{ secrets.FC_EMAIL }} # 收件邮箱
+          subject: "Freecloud Renew Task Result - $(date +'%Y-%m-%d')"
+          body: "<em>Freecloud renew task result notification from GitHub Actions.</em>"
+          type: "text/html"
+          attachment: "result.txt"
+
+  workflow-keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: liskin/gh-workflow-keepalive@v1
