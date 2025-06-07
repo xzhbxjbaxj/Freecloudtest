@@ -1,0 +1,26 @@
+name: FreeCloud Renew
+
+on:
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: pip install requests
+
+    - name: Run renew script
+      env:
+        FC_PROFILES: ${{ secrets.FC_PROFILES }}  # 放入 GitHub Secrets 中
+      run: |
+        python renew.py
