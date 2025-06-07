@@ -1,24 +1,24 @@
 import os
+import sys
 import json
-import requests
+import time
+import cloudscraper
 from urllib.parse import urlencode
 
 LOGIN_URL = "https://freecloud.ltd/login"
 CONSOLE_URL = "https://freecloud.ltd/member/index"
-RENEW_URL_TEMPLATE = "https://freecloud.ltd/server/detail/{}/renew"
+RENEW_URL = "https://freecloud.ltd/server/detail/{}/renew"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Referer": "https://freecloud.ltd/login",
     "Origin": "https://freecloud.ltd",
-    "Content-Type": "application/x-www-form-urlencoded",
 }
 
-
-def login(session: requests.Session, username: str, password: str) -> bool:
+def login(scraper, username, password):
     print(f"🔑 Logging in as {username}...")
 
-    form_data = {
+    payload = {
         "username": username,
         "password": password,
         "mobile": "",
@@ -29,69 +29,86 @@ def login(session: requests.Session, username: str, password: str) -> bool:
         "submit": "1"
     }
 
-    resp = session.post(LOGIN_URL, data=form_data, headers=HEADERS)
-    if resp.status_code != 200:
-        print("❌ Login request failed")
+    try:
+        response = scraper.post(LOGIN_URL, data=payload, headers=HEADERS)
+        if response.status_code != 200:
+            print(f"❌ Login failed with status: {response.status_code}")
+            return False
+
+        # 检查是否登录成功
+        if "退出登录" not in response.text and "member/index" not in response.text:
+            print("❌ Login failed. Please check username/password.")
+            return False
+
+        # 访问控制台页面验证会话
+        check = scraper.get(CONSOLE_URL)
+        if check.status_code != 200:
+            print("❌ Session check failed.")
+            return False
+
+        print("✅ Login successful.")
+        return True
+    except Exception as e:
+        print(f"❌ Login request failed: {e}")
         return False
 
-    if "退出登录" not in resp.text and "member/index" not in resp.text:
-        print("❌ 登录失败，请检查用户名或密码")
-        return False
+def renew_machine(scraper, machine_id):
+    print(f"🔁 Renewing machine {machine_id}...")
 
-    print("✅ 登录成功")
-    return True
-
-
-def renew_machine(session: requests.Session, machine_id: int):
-    print(f"🔁 尝试为服务器 {machine_id} 续费...")
-
-    form_data = {
+    data = {
         "month": "1",
         "submit": "1",
-        "coupon_id": "0",
+        "coupon_id": "0"
     }
 
-    renew_url = RENEW_URL_TEMPLATE.format(machine_id)
-    resp = session.post(renew_url, data=form_data, headers=HEADERS)
-
     try:
-        result = resp.json()
-        msg = result.get("msg", "")
-        if msg == "续费成功":
-            print(f"✅ 续费成功: {machine_id}")
-        elif msg == "请在到期前3天后再续费":
-            print(f"⚠️ 提示: {msg}")
-        else:
-            print(f"❗ 续费异常: {msg}")
-    except Exception:
-        print("⚠️ 非 JSON 响应:")
-        print(resp.text)
+        url = RENEW_URL.format(machine_id)
+        response = scraper.post(url, data=data, headers=HEADERS)
 
+        try:
+            resp_json = response.json()
+            msg = resp_json.get("msg", "")
+        except Exception:
+            msg = response.text
+
+        if "请在到期前3天后再续费" in msg:
+            print(f"⚠️  Machine {machine_id}: {msg}")
+        elif "续费成功" in msg:
+            print(f"✅  Machine {machine_id}: {msg}")
+        else:
+            print(f"❌  Machine {machine_id}: Unknown response: {msg}")
+    except Exception as e:
+        print(f"❌ Renew failed for machine {machine_id}: {e}")
 
 def main():
-    profiles_env = os.getenv("FC_PROFILES")
-    if not profiles_env:
-        print("❌ 请设置环境变量 FC_PROFILES")
-        return
+    config = os.getenv("FC_PROFILES")
+    if not config:
+        print("❌ FC_PROFILES env variable not set.")
+        sys.exit(1)
 
     try:
-        profiles = json.loads(profiles_env)
-        if not isinstance(profiles, list):
-            profiles = [profiles]
+        profiles = json.loads(config)
     except Exception as e:
-        print(f"❌ JSON 解析错误: {e}")
-        return
+        print(f"❌ Failed to parse FC_PROFILES: {e}")
+        sys.exit(1)
+
+    if not isinstance(profiles, list):
+        profiles = [profiles]
 
     for profile in profiles:
         username = profile.get("username")
         password = profile.get("password")
         machines = profile.get("machines", [])
 
-        with requests.Session() as session:
-            if login(session, username, password):
-                for machine_id in machines:
-                    renew_machine(session, machine_id)
+        if not username or not password or not machines:
+            print("⚠️ Skipping invalid profile.")
+            continue
 
+        scraper = cloudscraper.create_scraper()
+        if login(scraper, username, password):
+            for mid in machines:
+                renew_machine(scraper, mid)
+                time.sleep(1)
 
 if __name__ == "__main__":
     main()
